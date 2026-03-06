@@ -135,23 +135,35 @@ fn strip_think_blocks(s: &str) -> String {
     out
 }
 
-/// Strip markdown code fences that models sometimes add despite the prompt.
-fn strip_fences(s: &str) -> String {
-    if s.starts_with("```") {
-        let mut lines: Vec<&str> = s.lines().collect();
-        if !lines.is_empty() && lines[0].starts_with("```") {
-            lines.remove(0);
-        }
-        if lines.last() == Some(&"```") {
-            lines.pop();
-        }
-        return lines.join("\n");
-    }
-    s.to_string()
-}
-
+/// Extract a script from the model's response, handling the common ways models
+/// misbehave despite being asked for raw shell output:
+///
+/// 1. `<think>…</think>` blocks (reasoning models: DeepSeek-R1, QwQ, …)
+/// 2. A markdown code fence anywhere in the response — including after preamble
+///    text like "Here's the script:" that the current-line check would miss
+/// 3. Clean output — returned as-is
 fn clean_response(raw: &str) -> String {
-    strip_fences(strip_think_blocks(raw.trim()).trim())
+    // Pass 1: remove all reasoning blocks
+    let s = strip_think_blocks(raw.trim());
+    let s = s.trim();
+
+    // Pass 2: if a code fence exists anywhere, extract just its contents.
+    // This handles both "```\nscript\n```" at the start *and*
+    // "Some explanation:\n```bash\nscript\n```" with leading prose.
+    if let Some(open) = s.find("```") {
+        let rest = &s[open + 3..];
+        // Skip the optional language tag line (bash, sh, zsh, shell, …)
+        let body = match rest.find('\n') {
+            Some(nl) => &rest[nl + 1..],
+            None => rest,
+        };
+        if let Some(close) = body.find("```") {
+            return body[..close].trim().to_string();
+        }
+    }
+
+    // Pass 3: model followed instructions — return trimmed text directly
+    s.to_string()
 }
 
 // ── Public functions ───────────────────────────────────────────────────────────
