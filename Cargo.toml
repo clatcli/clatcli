@@ -3,6 +3,7 @@ name = "clat"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+description = "Command line assistance tool. Describe what you want in plain English; `clat` generates a shell script and runs it."
 
 [[bin]]
 name = "clat"
