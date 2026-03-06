@@ -1,6 +1,6 @@
 [package]
 name = "clat"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Command line assistance tool. Describe what you want in plain English; `clat` generates a shell script and runs it."
