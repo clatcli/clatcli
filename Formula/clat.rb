@@ -4,10 +4,10 @@ class Clat < Formula
 
   # Update url and sha256 when cutting a release:
   #   curl -sL https://github.com/clatcli/clatcli/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
-  url "https://github.com/clatcli/clatcli/archive/refs/tags/v0.1.1.tar.gz"
-  sha256 "1e79fc7a51907353991312ebf6918cef1330405c153dcff4af8f4f94a0851e79"
+  url "https://github.com/clatcli/clatcli/archive/refs/tags/v0.1.2.tar.gz"
+  sha256 "c81c9c7ba02d71f3fd37cd355736bd1da16240d466af8dec1e2f680c1c7d5d7c"
   license "MIT"
-  version "0.1.1"
+  version "0.1.2"
 
   # Allow: brew install --HEAD clatcli/clat/clat
   head "https://github.com/clatcli/clatcli.git", branch: "main"
