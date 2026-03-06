@@ -1,16 +1,16 @@
 class Clat < Formula
   desc "Natural language shell assistant — describe what you want, get a script"
-  homepage "https://github.com/OWNER/clat"
+  homepage "https://github.com/clatcli/clatcli"
 
   # Update url and sha256 when cutting a release:
-  #   sha256sum clat-X.Y.Z.tar.gz
-  url "https://github.com/OWNER/clat/archive/refs/tags/v0.1.0.tar.gz"
+  #   curl -sL https://github.com/clatcli/clatcli/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
+  url "https://github.com/clatcli/clatcli/archive/refs/tags/v0.1.1.tar.gz"
   sha256 "REPLACE_WITH_SHA256_OF_RELEASE_TARBALL"
   license "MIT"
-  version "0.1.0"
+  version "0.1.1"
 
-  # Allow: brew install --HEAD OWNER/clat/clat
-  head "https://github.com/OWNER/clat.git", branch: "main"
+  # Allow: brew install --HEAD clatcli/clat/clat
+  head "https://github.com/clatcli/clatcli.git", branch: "main"
 
   depends_on "rust" => :build
 
@@ -30,7 +30,7 @@ class Clat < Formula
         model   = "your-model-name"
 
       List available models:
-        clat --models
+        clat -l
 
       Add to PATH if needed (Homebrew installs to #{opt_bin}):
         Already on PATH if Homebrew's bin is in your PATH.

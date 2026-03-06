@@ -18,7 +18,7 @@ Supports reasoning models (DeepSeek-R1, QwQ, etc.) — `<think>` blocks are stri
 ### Homebrew (recommended)
 
 ```bash
-brew tap OWNER/clat
+brew tap clatcli/clat https://github.com/clatcli/clatcli
 brew install clat
 ```
 
