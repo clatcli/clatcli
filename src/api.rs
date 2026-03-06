@@ -1,19 +1,64 @@
 use anyhow::{anyhow, Result};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 use crate::config::Config;
+use crate::tools;
+
+// ── Message types ──────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Message {
+    pub role: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+
+    /// Set on assistant messages when the model wants to call tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+
+    /// Set on tool-result messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    fn system(content: impl Into<String>) -> Self {
+        Self { role: "system".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+    }
+    fn user(content: impl Into<String>) -> Self {
+        Self { role: "user".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+    }
+    fn tool_result(id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self { role: "tool".into(), content: Some(content.into()), tool_calls: None, tool_call_id: Some(id.into()) }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: ToolCallFn,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ToolCallFn {
+    pub name: String,
+    pub arguments: String,
+}
+
+// ── Request / Response ─────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct ChatRequest {
     model: String,
     messages: Vec<Message>,
     temperature: f32,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Message {
-    role: String,
-    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -24,77 +69,204 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: Message,
+    finish_reason: Option<String>,
 }
 
-pub fn generate_script(config: &Config, prompt: &str) -> Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()?;
+// ── Model listing ──────────────────────────────────────────────────────────────
 
-    let request = ChatRequest {
-        model: config.model.clone(),
-        messages: vec![
-            Message {
-                role: "system".to_string(),
-                content: config.system_prompt.clone(),
-            },
-            Message {
-                role: "user".to_string(),
-                content: prompt.to_string(),
-            },
-        ],
-        temperature: 0.1,
-    };
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
 
-    let mut req_builder = client
-        .post(format!("{}/chat/completions", config.api_url.trim_end_matches('/')))
-        .json(&request);
+#[derive(Deserialize)]
+pub struct ModelEntry {
+    pub id: String,
+    /// LM Studio includes a "state" field ("not loaded" / "loaded")
+    pub state: Option<String>,
+}
 
-    if !config.api_key.is_empty() {
-        req_builder = req_builder.bearer_auth(&config.api_key);
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+fn make_client() -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?)
+}
+
+fn base(config: &Config) -> String {
+    config.api_url.trim_end_matches('/').to_string()
+}
+
+fn authed(
+    config: &Config,
+    builder: reqwest::blocking::RequestBuilder,
+) -> reqwest::blocking::RequestBuilder {
+    if config.api_key.is_empty() {
+        builder
+    } else {
+        builder.bearer_auth(&config.api_key)
     }
+}
 
-    let resp = req_builder.send().map_err(|e| {
-        if e.is_connect() {
-            anyhow!(
-                "Could not connect to API at {}. Is LM Studio (or your inference server) running?",
-                config.api_url
-            )
-        } else {
-            anyhow!("Request failed: {}", e)
+fn connect_err(config: &Config, e: reqwest::Error) -> anyhow::Error {
+    if e.is_connect() || e.is_timeout() {
+        anyhow!(
+            "Could not connect to {}.\nIs LM Studio (or your inference server) running?",
+            config.api_url
+        )
+    } else {
+        anyhow!("{e}")
+    }
+}
+
+/// Remove all <think>…</think> blocks emitted by reasoning models (DeepSeek-R1,
+/// QwQ, etc.) before extracting the script.
+fn strip_think_blocks(s: &str) -> String {
+    let mut out = s.to_string();
+    loop {
+        match (out.find("<think>"), out.find("</think>")) {
+            (Some(start), Some(end)) if start < end => {
+                out = format!("{}{}", &out[..start], &out[end + "</think>".len()..]);
+            }
+            _ => break,
         }
-    })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().unwrap_or_default();
-        return Err(anyhow!("API error {}: {}", status, body));
     }
-
-    let chat: ChatResponse = resp.json()?;
-    let raw = chat
-        .choices
-        .into_iter()
-        .next()
-        .map(|c| c.message.content)
-        .unwrap_or_default();
-
-    Ok(strip_code_fences(raw.trim()))
+    out
 }
 
-/// Strip markdown code fences if the model wrapped its output anyway.
-fn strip_code_fences(s: &str) -> String {
+/// Strip markdown code fences that models sometimes add despite the prompt.
+fn strip_fences(s: &str) -> String {
     if s.starts_with("```") {
         let mut lines: Vec<&str> = s.lines().collect();
-        // Remove opening fence (```bash, ```sh, ``` etc.)
         if !lines.is_empty() && lines[0].starts_with("```") {
             lines.remove(0);
         }
-        // Remove closing fence
         if lines.last() == Some(&"```") {
             lines.pop();
         }
         return lines.join("\n");
     }
     s.to_string()
+}
+
+fn clean_response(raw: &str) -> String {
+    strip_fences(strip_think_blocks(raw.trim()).trim())
+}
+
+// ── Public functions ───────────────────────────────────────────────────────────
+
+/// Generate a shell script from a natural language prompt.
+/// If `config.use_tools` is true, the model may call tools to inspect the
+/// system before producing its final answer.
+pub fn generate_script(config: &Config, prompt: &str) -> Result<String> {
+    let client = make_client()?;
+    let tool_defs = if config.use_tools { Some(tools::definitions()) } else { None };
+
+    let mut messages = vec![
+        Message::system(&config.system_prompt),
+        Message::user(prompt),
+    ];
+
+    const MAX_ROUNDS: usize = 8;
+    for _ in 0..MAX_ROUNDS {
+        let request = ChatRequest {
+            model: config.model.clone(),
+            messages: messages.clone(),
+            temperature: 0.1,
+            tools: tool_defs.clone(),
+        };
+
+        let resp = authed(config, client.post(format!("{}/chat/completions", base(config))).json(&request))
+            .send()
+            .map_err(|e| connect_err(config, e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(anyhow!("API error {status}: {body}"));
+        }
+
+        let chat: ChatResponse = resp.json()?;
+        let choice = chat.choices.into_iter().next()
+            .ok_or_else(|| anyhow!("empty response from API"))?;
+
+        match choice.finish_reason.as_deref() {
+            Some("tool_calls") => {
+                let calls = choice.message.tool_calls.clone().unwrap_or_default();
+                messages.push(choice.message);
+
+                for tc in &calls {
+                    // Clear "thinking..." and show which tool is running
+                    eprint!("\r\x1b[K");
+                    eprint!("{} {}  ", "tool:".dimmed(), tc.function.name.cyan());
+                    std::io::stderr().flush().ok();
+
+                    let result = tools::dispatch(&tc.function.name, &tc.function.arguments);
+                    messages.push(Message::tool_result(tc.id.clone(), result));
+                }
+
+                // Restore thinking indicator for next round
+                eprint!("\r\x1b[K");
+                eprint!("{}", "thinking...".dimmed());
+                std::io::stderr().flush().ok();
+            }
+            _ => {
+                eprint!("\r\x1b[K");
+                let raw = choice.message.content.unwrap_or_default();
+                return Ok(clean_response(&raw));
+            }
+        }
+    }
+
+    Err(anyhow!("exceeded maximum tool-call rounds (check model compatibility)"))
+}
+
+/// List models available from the API.
+pub fn list_models(config: &Config) -> Result<Vec<ModelEntry>> {
+    let client = make_client()?;
+    let resp = authed(config, client.get(format!("{}/models", base(config))))
+        .send()
+        .map_err(|e| connect_err(config, e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(anyhow!("API error {status}: {body}"));
+    }
+
+    let models: ModelsResponse = resp.json()?;
+    Ok(models.data)
+}
+
+/// Request LM Studio to load a model. Derives the management API base URL by
+/// stripping the `/v1` path from `config.api_url`.
+/// This is LM Studio-specific; other APIs will return an error.
+pub fn load_model(config: &Config, model_id: &str) -> Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300)) // loading can be slow
+        .build()?;
+
+    // http://localhost:1234/v1  →  http://localhost:1234
+    let mgmt_base = config.api_url
+        .trim_end_matches('/')
+        .trim_end_matches("/v1");
+
+    let url = format!("{mgmt_base}/api/v0/models/load");
+    let body = serde_json::json!({ "identifier": model_id });
+
+    let resp = authed(config, client.post(&url).json(&body))
+        .send()
+        .map_err(|e| connect_err(config, e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        return Err(anyhow!(
+            "Failed to load model (HTTP {status}): {text}\n\
+             Note: model loading requires LM Studio with the management API enabled."
+        ));
+    }
+
+    Ok(())
 }

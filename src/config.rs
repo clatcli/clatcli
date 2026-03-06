@@ -4,8 +4,9 @@ use std::path::PathBuf;
 
 const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are clat, a shell command assistant. Convert the user's natural language request into a shell script.
+You may call tools to inspect the system before writing the script — use them when the command depends on what is installed or the current environment.
 Rules:
-- Output ONLY shell commands/script, nothing else
+- Output ONLY shell commands/script in your final response, nothing else
 - No markdown code fences, no explanations, no preamble
 - Use bash syntax
 - For multi-step tasks, chain commands with proper sequencing and error handling
@@ -23,6 +24,10 @@ fn default_model() -> String {
     "local-model".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_api_url")]
@@ -38,6 +43,15 @@ pub struct Config {
     #[serde(default)]
     pub auto_run: bool,
 
+    /// Command names (first word of any script line) that skip the confirmation prompt
+    #[serde(default)]
+    pub auto_run_patterns: Vec<String>,
+
+    /// Send MCP-style tool definitions with each request so the model can query
+    /// the system (OS info, available commands) before writing the script
+    #[serde(default = "default_true")]
+    pub use_tools: bool,
+
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
 }
@@ -49,16 +63,19 @@ impl Default for Config {
             model: default_model(),
             api_key: String::new(),
             auto_run: false,
+            auto_run_patterns: vec![],
+            use_tools: true,
             system_prompt: default_system_prompt(),
         }
     }
 }
 
 impl Config {
+    /// Config lives in the same directory as the installed binary: ~/.clat/
     pub fn path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
-            .join("clat")
+        dirs::home_dir()
+            .expect("cannot determine home directory")
+            .join(".clat")
             .join("config.toml")
     }
 
