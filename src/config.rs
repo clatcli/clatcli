@@ -85,7 +85,9 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::path();
         if !path.exists() {
-            return Ok(Self::default());
+            let cfg = Self::default();
+            cfg.save().ok(); // auto-create on first run; ignore errors (e.g. read-only fs)
+            return Ok(cfg);
         }
         let content = std::fs::read_to_string(&path)?;
         let config: Config = toml::from_str(&content)?;

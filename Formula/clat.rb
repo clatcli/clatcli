@@ -5,7 +5,7 @@ class Clat < Formula
   # Update url and sha256 when cutting a release:
   #   curl -sL https://github.com/clatcli/clatcli/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
   url "https://github.com/clatcli/clatcli/archive/refs/tags/v0.1.1.tar.gz"
-  sha256 "REPLACE_WITH_SHA256_OF_RELEASE_TARBALL"
+  sha256 "1e79fc7a51907353991312ebf6918cef1330405c153dcff4af8f4f94a0851e79"
   license "MIT"
   version "0.1.1"
 
@@ -23,8 +23,8 @@ class Clat < Formula
 
   def caveats
     <<~EOS
-      Config file: ~/.clat/config.toml
-      Run `clat --init` to create it with defaults, then set your API URL and model:
+      Config file: ~/.clat/config.toml (created automatically on first run)
+      Edit it to set your API URL and model:
 
         api_url = "http://localhost:1234/v1"   # LM Studio default
         model   = "your-model-name"

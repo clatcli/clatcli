@@ -231,7 +231,10 @@ pub fn generate_script(config: &Config, prompt: &str) -> Result<String> {
         }
     }
 
-    Err(anyhow!("exceeded maximum tool-call rounds (check model compatibility)"))
+    Err(anyhow!(
+        "exceeded maximum tool-call rounds — the model may not support tool calling.\n\
+         Fix: set use_tools = false in ~/.clat/config.toml"
+    ))
 }
 
 /// List models available from the API.
